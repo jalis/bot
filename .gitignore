@@ -51,3 +51,6 @@ build-iPhoneSimulator/
 
 # yml database files
 *.yml
+
+# json files
+*.json
