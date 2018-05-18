@@ -1,9 +1,8 @@
 require 'discordrb'
-require 'json'
-require 'net/http'
+require 'twitch-api'
 
 module Twitch
-	@@clientID='r92qo8y21vc1u4q5r6szfjhp9t1fbo'
+	@@client=Twitch::Client.new client_id: 'r92qo8y21vc1u4q5r6szfjhp9t1fbo'
 	@@chkThread
 	
 	@@subbed
@@ -18,33 +17,37 @@ module Twitch
 		confFile.close
 	end
 	
-	def Twitch.checkStreams(streams)
-		status=Hash.new
-		streams.each do |stream|
-			url = 'https://api.twitch.tv/kraken/streams/%s?client_id=%s' % [stream, @@clientID]
-			uri = URI(url)
-			res = Net::HTTP.get(uri)
-			status[stream] = JSON.parse(res)
-		end
-		return status
-	end
-	
 	def Twitch.main(bot, owners)
 		@@chkThread=Thread.new {
+			users=Array.new
+			live=Array.new
 			while true
 				sleep 60
-				if @@subbed.empty? == false then
-					status=Twitch.checkStreams(@@subbed.keys)
-					status.each do |k, v|
-						if v['stream']!=nil then
-							if @@subbed[k][0] then
-								@@subbed[k].drop(1).each do |chan|
-									bot.send_message(chan, "%s is playing '%s' at %s !" % [ v['stream']['channel']['display_name'], v['stream']['game'], v['stream']['channel']['url'] ])
+				unless @@subbed.empty? then
+					users=[]
+					live=[]
+
+					@@subbed.each do |k, v|
+						users.push(v[1])
+					end
+
+					data=@@client.get_streams(user_id: users).data
+					unless data.empty? then
+
+						data.each do |x|
+							chan=@@subbed.select{|k,v|v[1]==x.user_id}.keys[0].to_s
+							live.push(chan)
+							unless @@subbed[chan][0] then
+								@@subbed[chan][0]=true
+								@@subbed[chan].drop(2).each do |discordChannel|
+									bot.send_message(discordChannel, "%s is live!\n%s\nhttps://twitch.tv/%s !" % [chan, x.title, chan])
 								end
-								@@subbed[k][0]=false
 							end
-						else
-							@@subbed[k][0]=true
+						end
+					end
+					@@subbed.each do |k,v|
+						unless live.include?(k) then
+							@@subbed[k][0]=false
 						end
 					end
 				end
@@ -54,9 +57,17 @@ module Twitch
 		bot.command(:sub, min_args:1, max_args:1, description:'Subscribes this channel to receive notifications when the given Twitch channel goes live. Limited to owner.', usage:'sub <channel>') do |_event, chan|
 			break unless owners.include?(_event.user.id)
 			
+			data=@@client.get_users(login: chan).data
+			if data.empty? then
+				_event << "No such channel exists!"
+				break
+			end
+			id=data[0].id
+
 			if @@subbed[chan]==nil then
 				@@subbed[chan]=Array.new
-				@@subbed[chan][0]=true
+				@@subbed[chan][0]=false
+				@@subbed[chan][1]=id
 			else
 				if @@subbed[chan].index(_event.channel.id)!=nil then
 					_event << "Channel is already subscribed for updates on %s! To unsubscribe, use !unsub." % [chan]
@@ -79,7 +90,7 @@ module Twitch
 			if @@subbed[chan]==nil || @@subbed[chan].delete(_event.channel.id)==nil then
 				_event << "Channel is not subscribed for updates on %s!" % [chan]
 			else
-				if @@subbed[chan].size<2 then
+				if @@subbed[chan].size<3 then
 					@@subbed.delete(chan)
 				end
 				_event << "Successfully unsubscribed from updates on %s!" % [chan]
@@ -96,7 +107,7 @@ module Twitch
 
 			@@subbed.each do |k, v|
 				text << "Twitch channel %s:\n" % [k]
-				v.drop(1).each do |x|
+				v.drop(2).each do |x|
 					text << "<#%i>\n" % [x]
 				end
 				text << "\n\n"
